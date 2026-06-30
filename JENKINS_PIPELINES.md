@@ -372,26 +372,33 @@ Corriger les vulnérabilités `HIGH` ou `CRITICAL`, reconstruire l'image, puis r
 
 Ouvrir le dashboard SonarQube du projet, corriger les problèmes bloquants, puis relancer la pipeline.
 
-## Optimisation des builds avec changeset et cache npm
+## Optimisation des builds avec cache par stage et cache npm
 
-Les Jenkinsfiles backend et frontend utilisent des conditions `when { changeset ... }` sur les stages coûteux.
+Les Jenkinsfiles backend et frontend utilisent un cache par stage basé sur un hash des fichiers surveillés par chaque étape.
 
-Objectif : ne pas relancer inutilement les tests, SonarQube, Docker, Trivy, SBOM ou le push DockerHub quand un commit ne modifie que des fichiers qui ne sont pas concernés par ces contrôles, par exemple une documentation Markdown.
+Objectif : ne pas relancer une étape si les fichiers qu'elle vérifie n'ont pas changé depuis la dernière exécution réussie de cette même étape.
+
+Fonctionnement :
+
+1. Avant chaque stage, Jenkins calcule un hash des fichiers utiles pour ce stage.
+2. Jenkins compare ce hash avec un marqueur stocké dans :
+
+```text
+$HOME/.jenkins-stage-cache/<job-name>/<stage>.sha256
+```
+
+3. Si le hash existe déjà, le stage est ignoré.
+4. Si le hash est nouveau ou absent, le stage est exécuté.
+5. Le marqueur est mis à jour uniquement si le stage se termine avec succès.
 
 Exemples :
 
-- modification de `src/**` : lint, tests, Sonar, build Docker, Trivy, SBOM et push peuvent être relancés ;
+- modification de `src/**` : tests, Sonar, build Docker, Trivy, SBOM et push peuvent être relancés ;
 - modification de `Dockerfile` : build Docker, Trivy, SBOM et push sont relancés ;
-- modification de `sonar-project.properties` : analyse SonarQube relancée ;
-- modification de fichiers Markdown uniquement : les stages CI/CD principaux peuvent être ignorés.
+- modification de `sonar-project.properties` : tests de coverage et Sonar peuvent être relancés ;
+- modification de fichiers Markdown uniquement : les stages CI/CD principaux sont ignorés si leurs entrées n'ont pas changé depuis leur dernier succès.
 
-Le premier build d'un job exécute quand même les stages grâce à :
-
-```groovy
-expression { currentBuild.number == 1 }
-```
-
-Cela évite qu'un job fraîchement créé passe tous ses stages en `skipped` parce que Jenkins n'a pas encore d'historique de changements.
+Cette approche est plus précise qu'un simple `changeset`, car elle ne regarde pas seulement le dernier commit : elle vérifie si les entrées du stage sont identiques à celles d'une exécution réussie précédente.
 
 ### Cache npm
 
@@ -409,4 +416,4 @@ En revanche, le cache npm permet d'éviter de retélécharger les paquets à cha
 
 - on ne garde pas `node_modules` entre deux builds ;
 - on garde le cache des paquets npm ;
-- si aucun fichier utile n'a changé, le stage `Install dependencies` est lui-même ignoré.
+- si les fichiers surveillés par `Install dependencies` n'ont pas changé depuis son dernier succès, `npm ci` est ignoré.
