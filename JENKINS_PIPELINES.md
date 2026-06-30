@@ -371,3 +371,42 @@ Corriger les vulnérabilités `HIGH` ou `CRITICAL`, reconstruire l'image, puis r
 ### Quality Gate SonarQube échoue
 
 Ouvrir le dashboard SonarQube du projet, corriger les problèmes bloquants, puis relancer la pipeline.
+
+## Optimisation des builds avec changeset et cache npm
+
+Les Jenkinsfiles backend et frontend utilisent des conditions `when { changeset ... }` sur les stages coûteux.
+
+Objectif : ne pas relancer inutilement les tests, SonarQube, Docker, Trivy, SBOM ou le push DockerHub quand un commit ne modifie que des fichiers qui ne sont pas concernés par ces contrôles, par exemple une documentation Markdown.
+
+Exemples :
+
+- modification de `src/**` : lint, tests, Sonar, build Docker, Trivy, SBOM et push peuvent être relancés ;
+- modification de `Dockerfile` : build Docker, Trivy, SBOM et push sont relancés ;
+- modification de `sonar-project.properties` : analyse SonarQube relancée ;
+- modification de fichiers Markdown uniquement : les stages CI/CD principaux peuvent être ignorés.
+
+Le premier build d'un job exécute quand même les stages grâce à :
+
+```groovy
+expression { currentBuild.number == 1 }
+```
+
+Cela évite qu'un job fraîchement créé passe tous ses stages en `skipped` parce que Jenkins n'a pas encore d'historique de changements.
+
+### Cache npm
+
+Les pipelines utilisent :
+
+```bash
+npm ci --cache "$HOME/.npm-cache" --prefer-offline
+```
+
+`npm ci` réinstalle toujours `node_modules`, ce qui est normal et garantit une installation reproductible à partir de `package-lock.json`.
+
+En revanche, le cache npm permet d'éviter de retélécharger les paquets à chaque build. Le cache est placé hors du workspace Jenkins, donc il n'est pas supprimé par `cleanWs()`.
+
+À retenir :
+
+- on ne garde pas `node_modules` entre deux builds ;
+- on garde le cache des paquets npm ;
+- si aucun fichier utile n'a changé, le stage `Install dependencies` est lui-même ignoré.
